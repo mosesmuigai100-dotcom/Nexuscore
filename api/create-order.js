@@ -1,12 +1,5 @@
-// api/capture-order.js
-// Vercel Serverless Function — Captures payment & activates Pro in Supabase
-
-import { createClient } from '@supabase/supabase-js';
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
+// api/create-order.js
+// Vercel Serverless Function — Creates a PayPal order
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -15,9 +8,6 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { orderId, email } = req.body || {};
-  if (!orderId || !email) return res.status(400).json({ error: 'orderId and email required' });
-
   const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID;
   const PAYPAL_SECRET    = process.env.PAYPAL_SECRET;
   const PAYPAL_BASE      = process.env.PAYPAL_ENV === 'live'
@@ -25,6 +15,7 @@ export default async function handler(req, res) {
     : 'https://api-m.sandbox.paypal.com';
 
   try {
+    // 1. Get PayPal access token
     const tokenRes = await fetch(`${PAYPAL_BASE}/v1/oauth2/token`, {
       method: 'POST',
       headers: {
@@ -36,17 +27,32 @@ export default async function handler(req, res) {
     const tokenData = await tokenRes.json();
     if (!tokenData.access_token) throw new Error('PayPal auth failed');
 
-    const captureRes = await fetch(`${PAYPAL_BASE}/v2/checkout/orders/${orderId}/capture`, {
+    // 2. Create the order
+    const orderRes = await fetch(`${PAYPAL_BASE}/v2/checkout/orders`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${tokenData.access_token}`,
         'Content-Type': 'application/json',
       },
+      body: JSON.stringify({
+        intent: 'CAPTURE',
+        purchase_units: [{
+          amount: {
+            currency_code: 'USD',
+            value: '3.00',
+          },
+          description: 'NexusCore Pro — Monthly Subscription',
+        }],
+      }),
     });
-    const captureData = await captureRes.json();
+    const orderData = await orderRes.json();
 
-    if (captureData.status !== 'COMPLETED') {
-      throw new Error(`Payment not completed: ${captureData.status}`);
-    }
+    if (!orderData.id) throw new Error('Failed to create PayPal order');
 
-    const capture = captureData.purchase_units?.[0]?.payment
+    return res.status(200).json({ orderId: orderData.id });
+
+  } catch (err) {
+    console.error('create-order error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+}
